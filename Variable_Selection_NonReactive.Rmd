@@ -1,0 +1,316 @@
+---
+title: "Statistical Analysis"
+output: html_notebook
+runtime: shiny
+editor_options: 
+  markdown: 
+    wrap: sentence
+  fig_width: 10 
+  fig_height: 10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+#setwd("Variable_Selection")
+getwd()
+```
+
+## Reading the matrices
+
+```{r}
+#Rabies
+transition_distances_rabies_mp<-read.csv("transition_distances_batRABV.MCC.keep.target.heights.treesMP.csv",  
+                                         row.names = 1)
+transition_distances_rabies_ml<-read.csv("transition_distances_batRABV.MCC.keep.target.heights.treesML.csv",  
+                                         row.names = 1)
+transition_distances_rabies_tt<-read.csv("transition_distances_batRABV.MCC.keep.target.heights.treesTT.csv", 
+                                         row.names=1)
+
+#Ebola
+transition_distances_ebola_mp<-read.csv("transition_distances_ebola_not_annotated.treeMP.csv",  
+                                        row.names = 1)
+transition_distances_ebola_ml<-read.csv("transition_distances_ebola_not_annotated.treeML.csv", 
+                                        row.names = 1)
+transition_distances_ebola_tt<-read.csv("transition_distances_ebola_not_annotated.treeTT.csv",
+                                        row.names = 1)
+
+#Test
+transition_distances_pdvc_mp<-read.csv("transition_distances_PDCV_discrete_MCC.treeMP.csv",
+                                       row.names = 1)
+transition_distances_pdvc_ml<-read.csv("transition_distances_PDCV_discrete_MCC.treeML.csv",
+                                       row.names = 1)
+transition_distances_pdvc_tt<-read.csv("transition_distances_PDCV_discrete_MCC.treeTT.csv", 
+                                       row.names = 1)
+
+#Influenza
+transition_distances_influenza_mp<-read.csv("transition_distances_h3_small_sample.MCC.treMP.csv", 
+                                            row.names = 1)
+transition_distances_influenza_ml<-read.csv("transition_distances_h3_small_sample.MCC.treML.csv", 
+                                            row.names = 1)
+transition_distances_influenza_tt<-read.csv("transition_distances_h3_small_sample.MCC.treTT.csv", 
+                                           row.names = 1)
+
+transition_distances_rabies_mp <- transition_distances_rabies_mp[colnames(transition_distances_rabies_mp)!="Key"]
+transition_distances_rabies_ml <- transition_distances_rabies_ml[!colnames(transition_distances_rabies_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_rabies_tt <- transition_distances_rabies_tt[colnames(transition_distances_rabies_tt)!="Key"]
+transition_distances_ebola_mp <- transition_distances_ebola_mp[colnames(transition_distances_ebola_mp)!="Key"]
+transition_distances_ebola_ml <- transition_distances_ebola_ml[!colnames(transition_distances_ebola_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_ebola_tt <- transition_distances_ebola_tt[colnames(transition_distances_ebola_tt)!="Key"]
+transition_distances_pdvc_mp <- transition_distances_pdvc_mp[colnames(transition_distances_pdvc_mp)!="Key"]
+transition_distances_pdvc_ml <- transition_distances_pdvc_ml[!colnames(transition_distances_pdvc_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_pdvc_tt <- transition_distances_pdvc_tt[colnames(transition_distances_pdvc_tt)!="Key"]
+transition_distances_influenza_mp <- transition_distances_influenza_mp[colnames(transition_distances_influenza_mp)!="Key"]
+transition_distances_influenza_ml <- transition_distances_influenza_ml[!colnames(transition_distances_influenza_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_influenza_tt <- transition_distances_influenza_tt[colnames(transition_distances_influenza_tt)!="Key"]
+```
+
+```{r}
+matrices_list <- list(
+  "transition_distances_rabies_mp"= transition_distances_rabies_mp ,
+   "transition_distances_rabies_ml" = transition_distances_rabies_ml ,
+   "transition_distances_rabies_tt" = transition_distances_rabies_tt ,
+   "transition_distances_ebola_mp" = transition_distances_ebola_mp ,
+   "transition_distances_ebola_ml" = transition_distances_ebola_ml ,
+   "transition_distances_ebola_tt" = transition_distances_ebola_tt ,
+   "transition_distances_pdvc_mp" = transition_distances_pdvc_mp ,
+   "transition_distances_pdvc_ml" = transition_distances_pdvc_ml ,
+   "transition_distances_pdvc_tt" = transition_distances_pdvc_tt ,
+   "transition_distances_influenza_mp" = transition_distances_influenza_mp ,
+   "transition_distances_influenza_ml" = transition_distances_influenza_ml ,
+   "transition_distances_influenza_tt" = transition_distances_influenza_tt 
+)
+```
+
+### Ordinary Least Squares Regression
+
+```{r echo = FALSE}
+selectInput(
+  "matrix", label="Transition and Distances Matrix", choices=  names(matrices_list)
+)
+renderPrint({
+ lm<-lm(Transitions ~ ., data=matrices_list[[input$matrix]])
+ summary(lm)
+})
+
+renderPrint({
+  if(input$matrix %in% c("transition_distances_influenza_tt", "transition_distances_ebola_tt", "transition_distances_rabies_tt")){
+    lm<-lm(Transtion_Rates ~ ., data=matrices_list[[input$matrix]])
+  }else{
+    "Not applicable"
+  }
+ summary(lm)
+})
+```
+
+```{r, fig.width = 20, fig.height = 20}
+renderPlot({
+  cor_matrix<-cor(matrices_list[[input$matrix]])
+  corrplot::corrplot(cor_matrix, type="upper", order="hclust", title = input$matrix, tl.cex = 1.5)
+},  width = 800, 
+    height = 800)
+```
+
+<!-- #### Model 1 : greatCircleDistances at position 1 -->
+<!-- ```{r} -->
+<!-- lm<-lm(Transitions ~ greatCircleDistances + national_border_shared, data=transition_distances_ebola_mp) -->
+<!-- summary(lm) -->
+<!-- ``` -->
+
+<!-- #### Model 2 : greatCircleDistances at position 2 -->
+<!-- ```{r} -->
+<!-- lm_rev<-lm(Transitions ~  national_border_shared+ greatCircleDistances, data=transition_distances_ebola_mp) -->
+<!-- summary(lm_rev) -->
+<!-- ``` -->
+
+<!-- Indeed no difference between the 2 models. -->
+<!-- Do I understand it correctly when I say that summary compares the full model with the model without one of the 2 variables. -->
+
+<!-- #### Model 1 with Anova -->
+
+<!-- ```{r} -->
+<!-- anova(lm) -->
+<!-- ``` -->
+
+<!-- #### Model 2 with Anova -->
+
+<!-- ```{r} -->
+<!-- anova(lm_rev) -->
+<!-- ``` -->
+
+<!-- So here the order is important, because Anova as opposed to "summary" builds the model sequentially. -->
+<!-- So here for **Model2** this means that national_border_shared is significant when being the sole predictor but when having greatCircleDistances already in the model already then it is not a significant predictor for the transitons anymore. -->
+<!-- I confused summary with anova in the meeting. -->
+<!-- This is also explained here: <https://stats.stackexchange.com/questions/204940/anova-vs-summary-in-the-analysis-of-models-and-variables> -->
+
+<!-- ### Residuals -->
+
+<!-- Assumptions of linear regression: 1. -->
+<!-- Linear relation between predictor and independent variable 2. -->
+<!-- Normality of the residuals 3. -->
+<!-- Influential points -->
+
+<!-- #### Linearity of y and x -->
+
+<!-- ```{r} -->
+<!-- data=transition_distances[which(transition_distances$Transitions>0),] -->
+<!-- lm2<-lm((Transitions) ~I(greatCircleDistances), data=data) -->
+
+<!-- fit <- fitted(lm2) # gives the fitted values used in calculating the residuals -->
+<!-- rs <- rstandard(lm2) # gives standard residuals -->
+<!-- plot(rs~fit, main="rs vs fit") -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- data=transition_distances[which(transition_distances$Transitions>0),] -->
+<!-- lm2.log<-lm(log(Transitions) ~I(greatCircleDistances), data=data) -->
+
+<!-- fit.log <- fitted(lm2.log) # gives the fitted values used in calculating the residuals -->
+<!-- rs.log <- rstandard(lm2.log) # gives standard residuals -->
+<!-- plot(rs.log~fit.log, main="rs.log vs fit.log") -->
+<!-- ``` -->
+
+<!-- It looks like the residuals are not randomly distributed and the linear relationship does not hold entirely. -->
+<!-- There seems to be a structure left. -->
+
+<!-- #### Normality of residuals -->
+
+<!-- ```{r} -->
+<!-- shapiro.test(rs) -->
+<!-- shapiro.test(rs.log) -->
+<!-- ``` -->
+
+<!-- Shapiro wilk test rejects normality for both regressions but much better for log transformation. -->
+<!-- Histogram looks normally distributed for log transformed transitions but distribution is skewed to the right. -->
+<!-- QQ plot indicates also skewd data -->
+
+<!-- ```{r} -->
+<!-- par(mfrow=c(1,2)) -->
+<!-- plot(lm2, which = 2) -->
+<!-- plot(lm2.log, which = 2) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- par(mfrow=c(1,2)) -->
+<!-- hist(rs, prob=TRUE) -->
+<!-- hist(rs.log, prob=TRUE) -->
+<!-- ``` -->
+
+<!-- #### Detect influential points -->
+
+<!-- ```{r} -->
+<!-- par(mfrow=c(1,2)) -->
+<!-- plot(cooks.distance(lm), main="lm") -->
+<!-- ``` -->
+
+<!-- Normally we could exclude the influential point but here it is very interesting to see that this point is an influential point since it is the one with the most transitions also. -->
+
+<!-- ```{r} -->
+<!-- transition_distances[which(cooks.distance(lm2)==max(cooks.distance(lm2))),] -->
+<!-- ``` -->
+
+<!-- Below 2 other approaches to find the best model: -->
+
+#### Leaps package : Best model for every amount of predictors
+
+The variable to be included is marked with an asterix:
+
+```{r}
+system.time(
+  {
+    library(leaps)
+    data<-transition_distances[, 2:27] #without key and without the label column
+    transition.full<-regsubsets(Transitions~., data, nvmax=25)
+    x<-summary(transition.full)
+    summary(transition.full)
+  }
+)
+```
+
+<!-- ```{r} -->
+<!-- summary(transition.full)[["adjr2"]] -->
+<!-- max(summary(transition.full)[["adjr2"]]) -->
+<!-- which(summary(transition.full)[["adjr2"]]==max(summary(transition.full)[["adjr2"]])) -->
+<!-- ``` -->
+
+<!-- \#\#\#\#Best model accodring to adjusted R² -->
+
+<!-- ```{r} -->
+<!-- x<-summary(transition.full) -->
+<!-- x$which[8,which(x$which[8,]==TRUE)] -->
+<!-- ``` -->
+
+<!-- We can also plot it and see which is the best model. -->
+
+<!-- ```{r} -->
+<!-- plot(transition.full, scale="adjr2") -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- plot(transition.full, scale="bic") -->
+<!-- ``` -->
+
+<!-- BIC selects much less. -->
+
+<!-- ### Lasso selection -->
+
+<!-- ```{r} -->
+<!-- library(glmnet) -->
+<!-- grid<-10^seq(10,-2, length=100) #100 values of lambda covering the range 0.01 to 10^10 -->
+<!-- x<-model.matrix(Transitions~., transition_distances[,2:27])[,-1] #this means everything except column 1, the intercept -->
+<!-- y<-transition_distances$Transitions -->
+<!-- set.seed(1) -->
+<!-- train<-sample(1:nrow(x), nrow(x)/2) -->
+<!-- test<-(-train) -->
+<!-- y.test<-y[test] -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- cv.out<-cv.glmnet(x[train,], y[train], alpha=1, type.measure = "deviance", nfolds = 10) #deviance a.k.a MSE -->
+<!-- plot(cv.out) -->
+<!-- ``` -->
+
+<!-- Best tuning parameter we can select based on the mean squared error/deviance as we also see in the plot above: -->
+
+<!-- ```{r} -->
+<!-- bestlam<-cv.out$lambda.min -->
+<!-- bestlam -->
+<!-- ``` -->
+
+<!-- Assessing how good the model is by predicting the number of transitions for the non-used test observations and then calculating the MSE with the real transitions. -->
+
+<!-- ```{r} -->
+<!-- lasso.pred<-predict(cv.out, s=bestlam, newx=x[test,]) -->
+<!-- mean((lasso.pred-y[test])^2) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- out<-glmnet(x,y,alpha=1, lambda=0) -->
+<!-- lasso.coef<-predict(out, s=bestlam, type="coefficients")#[1:25] -->
+<!-- lasso.coef -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- pred<-predict(out,s=0, newx=x) -->
+<!-- cor.test(pred,y) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- summary(lm(Transitions ~ . , data =transition_distances[,2:27]))$coefficients -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- names(data) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- library(plotmo) -->
+<!-- plot_glmnet(out, xvar="lambda", xlim=c(-3,1), ylim=c(-2,2), col=1:25, label=T) -->
+<!-- abline(v=log(bestlam), lty=2) -->
+<!-- ``` -->
+
+<!-- The model has only 4 predictors left and consistently greatCircleDistances is among the selected predictors. -->

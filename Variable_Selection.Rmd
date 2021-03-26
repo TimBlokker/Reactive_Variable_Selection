@@ -1,0 +1,298 @@
+---
+title: "Variable Selection"
+output: html_notebook
+runtime: shiny
+editor_options: 
+  markdown: 
+    wrap: sentence
+  fig_width: 10 
+  fig_height: 10
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(leaps)
+library(corrplot)
+library(dplyr)
+```
+
+```{r}
+#setwd("Variable_Selection")
+getwd()
+```
+
+## Reading the matrices
+
+```{r}
+#Rabies
+transition_distances_rabies_mp<-read.csv("input/transition_distances_batRABV.MCC.keep.target.heights.treesMP.csv",  
+                                         row.names = 1)
+transition_distances_rabies_ml<-read.csv("input/transition_distances_batRABV.MCC.keep.target.heights.treesML.csv",  
+                                         row.names = 1)
+transition_distances_rabies_tt<-read.csv("input/transition_distances_batRABV.MCC.keep.target.heights.treesTT.csv", 
+                                         row.names=1)
+
+#Ebola
+transition_distances_ebola_mp<-read.csv("input/transition_distances_ebola_not_annotated.treeMP.csv",  
+                                        row.names = 1)
+transition_distances_ebola_ml<-read.csv("input/transition_distances_ebola_not_annotated.treeML.csv", 
+                                        row.names = 1)
+transition_distances_ebola_tt<-read.csv("input/transition_distances_ebola_not_annotated.treeTT.csv",
+                                        row.names = 1)
+
+#Test
+transition_distances_pdvc_mp<-read.csv("input/transition_distances_PDCV_discrete_MCC.treeMP.csv",
+                                       row.names = 1)
+transition_distances_pdvc_ml<-read.csv("input/transition_distances_PDCV_discrete_MCC.treeML.csv",
+                                       row.names = 1)
+transition_distances_pdvc_tt<-read.csv("input/transition_distances_PDCV_discrete_MCC.treeTT.csv", 
+                                       row.names = 1)
+
+#Influenza
+transition_distances_influenza_mp<-read.csv("input/transition_distances_h3_small_sample.MCC.treMP.csv", 
+                                            row.names = 1)
+transition_distances_influenza_ml<-read.csv("input/transition_distances_h3_small_sample.MCC.treML.csv", 
+                                            row.names = 1)
+transition_distances_influenza_tt<-read.csv("input/transition_distances_h3_small_sample.MCC.treTT.csv", 
+                                           row.names = 1)
+
+transition_distances_rabies_mp <- transition_distances_rabies_mp[colnames(transition_distances_rabies_mp)!="Key"]
+transition_distances_rabies_ml <- transition_distances_rabies_ml[!colnames(transition_distances_rabies_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_rabies_tt <- transition_distances_rabies_tt[colnames(transition_distances_rabies_tt)!="Key"]
+transition_distances_ebola_mp <- transition_distances_ebola_mp[colnames(transition_distances_ebola_mp)!="Key"]
+transition_distances_ebola_ml <- transition_distances_ebola_ml[!colnames(transition_distances_ebola_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_ebola_tt <- transition_distances_ebola_tt[colnames(transition_distances_ebola_tt)!="Key"]
+transition_distances_pdvc_mp <- transition_distances_pdvc_mp[colnames(transition_distances_pdvc_mp)!="Key"]
+transition_distances_pdvc_ml <- transition_distances_pdvc_ml[!colnames(transition_distances_pdvc_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_pdvc_tt <- transition_distances_pdvc_tt[colnames(transition_distances_pdvc_tt)!="Key"]
+transition_distances_influenza_mp <- transition_distances_influenza_mp[colnames(transition_distances_influenza_mp)!="Key"]
+transition_distances_influenza_ml <- transition_distances_influenza_ml[!colnames(transition_distances_influenza_ml) %in% c("Transition_Rates", "Key")]
+transition_distances_influenza_tt <- transition_distances_influenza_tt[colnames(transition_distances_influenza_tt)!="Key"]
+```
+
+```{r}
+matrices_list <- list(
+  "transition_distances_rabies_mp"= transition_distances_rabies_mp ,
+   "transition_distances_rabies_ml" = transition_distances_rabies_ml ,
+   "transition_distances_rabies_tt" = transition_distances_rabies_tt ,
+   "transition_distances_ebola_mp" = transition_distances_ebola_mp ,
+   "transition_distances_ebola_ml" = transition_distances_ebola_ml ,
+   "transition_distances_ebola_tt" = transition_distances_ebola_tt ,
+   "transition_distances_pdvc_mp" = transition_distances_pdvc_mp ,
+   "transition_distances_pdvc_ml" = transition_distances_pdvc_ml ,
+   "transition_distances_pdvc_tt" = transition_distances_pdvc_tt ,
+   "transition_distances_influenza_mp" = transition_distances_influenza_mp ,
+   "transition_distances_influenza_ml" = transition_distances_influenza_ml ,
+   "transition_distances_influenza_tt" = transition_distances_influenza_tt 
+)
+```
+
+## Choose matrix to analyze
+```{r}
+selectInput("matrix",
+            label = "Transition and Distances Matrix",
+            choices =  names(matrices_list))
+```
+
+```{r}
+
+output$response <-renderUI({
+  req(input$matrix)
+  selectInput("response",
+            label = "Response variable",
+            choices= colnames(matrices_list[[input$matrix]] %>% dplyr::select(starts_with("Transition"))))
+    })
+
+uiOutput("response")
+```
+
+## Correlation Plot
+```{r, fig.width = 20, fig.height = 20}
+renderPlot({
+  cor_matrix<-cor(matrices_list[[input$matrix]])
+  corrplot::corrplot(cor_matrix, type="upper", order="hclust", title = input$matrix, tl.cex = 1.5)
+},
+width = 800, 
+height = 800)
+```
+
+## Ordinary Least Squares Regression
+
+```{r}
+lm_ols<-reactive({
+  f<-as.formula(paste0(input$response, "~",
+                       paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
+  
+  lm <- lm( formula=f, data=matrices_list[[input$matrix]])
+
+  lm[["call"]][["formula"]]<-eval(lm[["call"]][["formula"]])
+  lm[["call"]][["data"]]<-eval(input$matrix)
+  lm
+})
+
+renderPrint({
+  summary(lm_ols())
+})
+
+```
+
+## Leaps package : Best model for every amount of predictors, forward and backward selection
+
+### Select the method
+```{r}
+selectInput("step_method",
+            label = "Stepwise selection method:",
+            choices =  c("exhaustive", "backward", "forward"))
+```
+
+The variable to be included is marked with an asterix:
+```{r}
+lm_regsubsets<-reactive({
+  lm_regsubsets <- leaps::regsubsets(
+     x=as.formula(paste0(input$response, "~", 
+                       paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+"))),
+     data=matrices_list[[input$matrix]],
+     nvmax = min(10, length(colnames(matrices_list[[input$matrix]]))),
+     method=input$step_method)
+    
+  lm_regsubsets[["call"]][[2]]<-as.formula(paste0(input$response, "~", paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
+  lm_regsubsets[["call"]][[3]]<-eval(input$matrix) 
+  lm_regsubsets
+})
+
+renderPrint({
+  summary(lm_regsubsets())
+})
+```
+
+# 
+# ```{r}
+# library(dplyr)
+# lm_regsubsets2 <- leaps::regsubsets(
+#      x=as.formula(paste0("Transitions", "~",
+#                        paste(colnames(matrices_list[["transition_distances_influenza_tt"]]%>%select(!starts_with("Trans"))), collapse = "+"))),
+#      data=matrices_list[["transition_distances_influenza_tt"]],
+#      nvmax = min(10, length(colnames(matrices_list[["transition_distances_influenza_tt"]]))),
+#      method="forward")
+# sum_regsubsets2<-summary(lm_regsubsets2)
+# sum_regsubsets2
+# names(sum_regsubsets2)
+# ```
+# 
+
+### Select the criterium
+```{r}
+selectInput("selection_crit",
+            label = "Selection criterium:",
+            choices = c("rsq", "rss", "adjr2", "cp", "bic"))
+```
+
+```{r}
+renderPlot({
+  sum_regsubsets<-summary(lm_regsubsets())
+  plot(get(input$selection_crit, sum_regsubsets), xlab="Number of variables", ylab=input$selection_crit)
+})
+```
+
+BIC is indeed more stringent then the other, also you see how RSS and R² are not valid selection criteriums since they strictly improve with additionaly predictors.
+
+
+### Best model accodring to adjusted R²
+```{r}
+
+renderPrint({
+  summary(lm_regsubsets())[["adjr2"]]
+})
+
+renderPrint({
+max(summary(lm_regsubsets())[["adjr2"]])
+})
+
+renderPrint({
+which(summary(lm_regsubsets())[["adjr2"]]==max(summary(lm_regsubsets())[["adjr2"]]))
+})
+```
+
+```{r}
+renderPrint({
+x<-summary(lm_regsubsets())
+x$which[8,which(x$which[8,]==TRUE)]
+})
+```
+
+We can also plot it and see which is the best model.
+
+```{r}
+renderPlot({
+plot(lm_regsubsets(), scale="adjr2")
+})
+```
+
+```{r}
+renderPlot({
+plot(lm_regsubsets(), scale="bic")
+})
+```
+
+BIC selects much less.
+
+<!-- ### Lasso selection -->
+
+<!-- ```{r} -->
+<!-- library(glmnet) -->
+<!-- grid<-10^seq(10,-2, length=100) #100 values of lambda covering the range 0.01 to 10^10 -->
+<!-- x<-model.matrix(Transitions~., transition_distances[,2:27])[,-1] #this means everything except column 1, the intercept -->
+<!-- y<-transition_distances$Transitions -->
+<!-- set.seed(1) -->
+<!-- train<-sample(1:nrow(x), nrow(x)/2) -->
+<!-- test<-(-train) -->
+<!-- y.test<-y[test] -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- cv.out<-cv.glmnet(x[train,], y[train], alpha=1, type.measure = "deviance", nfolds = 10) #deviance a.k.a MSE -->
+<!-- plot(cv.out) -->
+<!-- ``` -->
+
+<!-- Best tuning parameter we can select based on the mean squared error/deviance as we also see in the plot above: -->
+
+<!-- ```{r} -->
+<!-- bestlam<-cv.out$lambda.min -->
+<!-- bestlam -->
+<!-- ``` -->
+
+<!-- Assessing how good the model is by predicting the number of transitions for the non-used test observations and then calculating the MSE with the real transitions. -->
+
+<!-- ```{r} -->
+<!-- lasso.pred<-predict(cv.out, s=bestlam, newx=x[test,]) -->
+<!-- mean((lasso.pred-y[test])^2) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- out<-glmnet(x,y,alpha=1, lambda=0) -->
+<!-- lasso.coef<-predict(out, s=bestlam, type="coefficients")#[1:25] -->
+<!-- lasso.coef -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- pred<-predict(out,s=0, newx=x) -->
+<!-- cor.test(pred,y) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- summary(lm(Transitions ~ . , data =transition_distances[,2:27]))$coefficients -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- names(data) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- library(plotmo) -->
+<!-- plot_glmnet(out, xvar="lambda", xlim=c(-3,1), ylim=c(-2,2), col=1:25, label=T) -->
+<!-- abline(v=log(bestlam), lty=2) -->
+<!-- ``` -->
+
+<!-- The model has only 4 predictors left and consistently greatCircleDistances is among the selected predictors. -->
