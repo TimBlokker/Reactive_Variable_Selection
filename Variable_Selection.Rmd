@@ -120,6 +120,7 @@ height = 800)
 
 ```{r}
 lm_ols<-reactive({
+  req(input$response, input$matrix)
   f<-as.formula(paste0(input$response, "~",
                        paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
   
@@ -148,15 +149,16 @@ selectInput("step_method",
 The variable to be included is marked with an asterix:
 ```{r}
 lm_regsubsets<-reactive({
+  req(input$response, input$matrix)
   lm_regsubsets <- leaps::regsubsets(
      x=as.formula(paste0(input$response, "~", 
                        paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+"))),
      data=matrices_list[[input$matrix]],
-     nvmax = min(10, length(colnames(matrices_list[[input$matrix]]))),
+     nvmax = min(length(colnames(matrices_list[[input$matrix]]))),
      method=input$step_method)
     
   lm_regsubsets[["call"]][[2]]<-as.formula(paste0(input$response, "~", paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
-  lm_regsubsets[["call"]][[3]]<-eval(input$matrix) 
+ # lm_regsubsets[["call"]][[3]]<-eval(input$matrix) 
   lm_regsubsets
 })
 
@@ -194,47 +196,39 @@ renderPlot({
 })
 ```
 
-BIC is indeed more stringent then the other, also you see how RSS and R² are not valid selection criteriums since they strictly improve with additionaly predictors.
+BIC is  more stringent then the other, also you see how RSS and R² are not valid selection criteriums since they strictly improve with additionaly predictors.
 
 
-### Best model accodring to adjusted R²
+### What is the best number of selected variables (also check plots)
 ```{r}
-
 renderPrint({
-  summary(lm_regsubsets())[["adjr2"]]
-})
-
-renderPrint({
-max(summary(lm_regsubsets())[["adjr2"]])
-})
-
-renderPrint({
-which(summary(lm_regsubsets())[["adjr2"]]==max(summary(lm_regsubsets())[["adjr2"]]))
+  if(input$selection_crit %in% c("cp", "bic", "rss")){
+    which(summary(lm_regsubsets())[[input$selection_crit]]==min(summary(lm_regsubsets())[[input$selection_crit]]))
+  }else{
+    which(summary(lm_regsubsets())[[input$selection_crit]]==max(summary(lm_regsubsets())[[input$selection_crit]]))
+  }
 })
 ```
 
 ```{r}
+output$coefs<-renderUI({
+  numericInput(
+    inputId= "number_of_vars",
+    label="Get coefficients for selected number of var:",
+    value=which(summary(lm_regsubsets())[[input$selection_crit]]==max(summary(lm_regsubsets())[[input$selection_crit]])),
+    min=1)
+})
+uiOutput("coefs")
+```
+
+```{r}
 renderPrint({
-x<-summary(lm_regsubsets())
-x$which[8,which(x$which[8,]==TRUE)]
+  req(input$number_of_vars)
+  coef(lm_regsubsets(), input$number_of_vars)
 })
 ```
 
-We can also plot it and see which is the best model.
 
-```{r}
-renderPlot({
-plot(lm_regsubsets(), scale="adjr2")
-})
-```
-
-```{r}
-renderPlot({
-plot(lm_regsubsets(), scale="bic")
-})
-```
-
-BIC selects much less.
 
 <!-- ### Lasso selection -->
 
