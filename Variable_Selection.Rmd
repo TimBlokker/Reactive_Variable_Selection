@@ -88,6 +88,7 @@ matrices_list <- list(
 ```
 
 ## Choose matrix to analyze
+
 ```{r}
 selectInput("matrix",
             label = "Transition and Distances Matrix",
@@ -107,6 +108,7 @@ uiOutput("response")
 ```
 
 ## Correlation Plot
+
 ```{r, fig.width = 20, fig.height = 20}
 renderPlot({
   cor_matrix<-cor(matrices_list[[input$matrix]])
@@ -140,6 +142,7 @@ renderPrint({
 ## Leaps package : Best model for every amount of predictors, forward and backward selection
 
 ### Select the method
+
 ```{r}
 selectInput("step_method",
             label = "Stepwise selection method:",
@@ -147,6 +150,7 @@ selectInput("step_method",
 ```
 
 The variable to be included is marked with an asterix:
+
 ```{r}
 lm_regsubsets<-reactive({
   req(input$response, input$matrix)
@@ -167,22 +171,31 @@ renderPrint({
 })
 ```
 
-# 
-# ```{r}
-# library(dplyr)
-# lm_regsubsets2 <- leaps::regsubsets(
-#      x=as.formula(paste0("Transitions", "~",
-#                        paste(colnames(matrices_list[["transition_distances_influenza_tt"]]%>%select(!starts_with("Trans"))), collapse = "+"))),
-#      data=matrices_list[["transition_distances_influenza_tt"]],
-#      nvmax = min(10, length(colnames(matrices_list[["transition_distances_influenza_tt"]]))),
-#      method="forward")
-# sum_regsubsets2<-summary(lm_regsubsets2)
-# sum_regsubsets2
-# names(sum_regsubsets2)
-# ```
-# 
+<!-- ```{r} -->
+
+<!-- library(dplyr) -->
+
+<!--  lm_regsubsets2 <- leaps::regsubsets( -->
+
+<!--       x=as.formula(paste0("Transitions", "~", -->
+
+<!--                         paste(colnames(matrices_list[["transition_distances_influenza_tt"]]%>%select(!starts_with("Trans"))), collapse = "+"))), -->
+
+<!--      data=matrices_list[["transition_distances_influenza_tt"]], -->
+
+<!--      nvmax = min(10, length(colnames(matrices_list[["transition_distances_influenza_tt"]]))), -->
+<!--       method="forward") -->
+
+<!--  sum_regsubsets2<-summary(lm_regsubsets2) -->
+
+<!--  sum_regsubsets2 -->
+
+<!--  names(sum_regsubsets2) -->
+
+<!-- ``` -->
 
 ### Select the criterium
+
 ```{r}
 selectInput("selection_crit",
             label = "Selection criterium:",
@@ -196,10 +209,8 @@ renderPlot({
 })
 ```
 
-BIC is  more stringent then the other, also you see how RSS and R² are not valid selection criteriums since they strictly improve with additionaly predictors.
+### What is the best number of selected variables (also check plots): Out of the box criteria
 
-
-### What is the best number of selected variables (also check plots)
 ```{r}
 renderPrint({
   if(input$selection_crit %in% c("cp", "bic", "rss")){
@@ -208,8 +219,98 @@ renderPrint({
     which(summary(lm_regsubsets())[[input$selection_crit]]==max(summary(lm_regsubsets())[[input$selection_crit]]))
   }
 })
+
 ```
 
+BIC is more stringent then the other, also you see how RSS and R² are not valid selection criteriums since they strictly improve with additionaly predictors.
+
+### Cross-validation as "criterium"
+
+#### Define a few functions to keep it readable
+
+```{r}
+#' Predict the response variable values for a given model including a given number of predictors and given new (test) data.
+#'
+#' @param regsubset_obj object of class regsubset that is contains the models of different sizes
+#' @param number_of_vars the size of the model to use for the predictions
+#' @param newdata test data to carry out the predictions on
+#' @return The matrix product of the model.matrix containing the selected variables (nxp) and the coefficient vector (px1) resulting in a nx1 vector with the values of the response variable for every 
+#' @credit Credit to the authors of the ILSR book
+#' state transition
+predict.regsubsets<-function(regsubset_obj,number_of_vars, newdata, f){
+  mat<-model.matrix(f, newdata)
+  coefi<-coef(regsubset_obj, number_of_vars)
+  xvars<-names(coefi) #get the variable names included in the model
+  mat[, xvars] %*% coefi #matrix multiplication resulting in a nx1 matrix/vector
+}
+
+#' Function to calculate the mean squared error given the actual and predicted values
+#'
+#' @param actual The actual values
+#' @param predicted The predicted values
+MSE<-function(actual, predicted){
+  mean((((actual-predicted)[,1])^2))
+}
+
+```
+
+```{r}
+numericInput(
+    inputId= "folds",
+    label="Number of folds to include",
+    value=10,
+    min=2)
+```
+
+
+```{r}
+mean_cv_errors<-reactive({
+  req(input$response, input$step_method, input$matrix)
+  
+  k=input$folds #10 folds
+  set.seed(1) #random seed
+  
+  predictors<-matrices_list[[input$matrix]]%>%
+    select(!starts_with("Transition"))
+  data<-matrices_list[[input$matrix]]%>%
+    select(c(!starts_with("Transition"),matches(input$response)))
+  
+  folds=sample(1:k, nrow(data), replace=T) #assigning numbers from 1:10 to each row in the dataframe : these are the folds
+  cv_errors<-matrix(NA, k, dim(predictors)[2], dimnames = list(1:k, 1:dim(predictors)[2]))
+  f<-as.formula(paste0(input$response, "~",
+                          paste(colnames(predictors), collapse = "+")))
+  
+  for(test_fold in 1:k) {
+    best.fit<-leaps::regsubsets(
+      x=f,
+      data=data%>%filter(folds!=test_fold),
+      nvmax = dim(data)[2],
+      method=input$step_method)
+    
+    for(number_of_vars in 1:dim(predictors)[2]){
+      pred<-predict.regsubsets(best.fit, number_of_vars, data%>%filter(folds==test_fold),f)
+      cv_errors[test_fold, number_of_vars ] <-MSE(data%>%select(input$response)%>%filter(folds==test_fold), pred)
+    }
+  }
+  apply(cv_errors, 2, mean) #column-wise mean, which is the mean across the folds for each size of the model
+})
+```
+
+```{r}
+renderPlot(
+  plot(mean_cv_errors())
+)
+```
+
+### What is the best number of selected variables (also check plots): CV
+```{r}
+renderPrint({
+  which(mean_cv_errors()==min(mean_cv_errors()))
+})
+```
+
+
+### The best model
 ```{r}
 output$coefs<-renderUI({
   numericInput(
@@ -230,63 +331,112 @@ renderPrint({
 
 
 
+
+## Subdivide in train and test 
+<!-- The training data can be used to train the model and subsequently we can assess the goodness of the model via the test data. -->
+<!-- ```{r} -->
+<!-- set.seed(1) #set a random seed for reproducability -->
+<!-- train_ind<-sample(dim(transition_distances_ebola_tt)[1], size=dim(transition_distances_ebola_tt)[1]/2, replace=F) #set half of the data randomly as training data -->
+<!-- train<-transition_distances_ebola_tt[ train_ind,] #subset the actual data -->
+<!-- test <-transition_distances_ebola_tt[-train_ind,] #do the same for the other half -->
+<!-- ``` -->
+
+
+
+
+
 <!-- ### Lasso selection -->
 
 <!-- ```{r} -->
+
 <!-- library(glmnet) -->
+
 <!-- grid<-10^seq(10,-2, length=100) #100 values of lambda covering the range 0.01 to 10^10 -->
+
 <!-- x<-model.matrix(Transitions~., transition_distances[,2:27])[,-1] #this means everything except column 1, the intercept -->
+
 <!-- y<-transition_distances$Transitions -->
+
 <!-- set.seed(1) -->
+
 <!-- train<-sample(1:nrow(x), nrow(x)/2) -->
+
 <!-- test<-(-train) -->
+
 <!-- y.test<-y[test] -->
+
 <!-- ``` -->
 
 <!-- ```{r} -->
+
 <!-- set.seed(1) -->
+
 <!-- cv.out<-cv.glmnet(x[train,], y[train], alpha=1, type.measure = "deviance", nfolds = 10) #deviance a.k.a MSE -->
+
 <!-- plot(cv.out) -->
+
 <!-- ``` -->
 
 <!-- Best tuning parameter we can select based on the mean squared error/deviance as we also see in the plot above: -->
 
 <!-- ```{r} -->
+
 <!-- bestlam<-cv.out$lambda.min -->
+
 <!-- bestlam -->
+
 <!-- ``` -->
 
 <!-- Assessing how good the model is by predicting the number of transitions for the non-used test observations and then calculating the MSE with the real transitions. -->
 
 <!-- ```{r} -->
+
 <!-- lasso.pred<-predict(cv.out, s=bestlam, newx=x[test,]) -->
+
 <!-- mean((lasso.pred-y[test])^2) -->
+
 <!-- ``` -->
 
 <!-- ```{r} -->
+
 <!-- set.seed(1) -->
+
 <!-- out<-glmnet(x,y,alpha=1, lambda=0) -->
+
 <!-- lasso.coef<-predict(out, s=bestlam, type="coefficients")#[1:25] -->
+
 <!-- lasso.coef -->
+
 <!-- ``` -->
 
 <!-- ```{r} -->
+
 <!-- pred<-predict(out,s=0, newx=x) -->
+
 <!-- cor.test(pred,y) -->
+
 <!-- ``` -->
 
 <!-- ```{r} -->
+
 <!-- summary(lm(Transitions ~ . , data =transition_distances[,2:27]))$coefficients -->
+
 <!-- ``` -->
 
 <!-- ```{r} -->
+
 <!-- names(data) -->
+
 <!-- ``` -->
 
 <!-- ```{r} -->
+
 <!-- library(plotmo) -->
+
 <!-- plot_glmnet(out, xvar="lambda", xlim=c(-3,1), ylim=c(-2,2), col=1:25, label=T) -->
+
 <!-- abline(v=log(bestlam), lty=2) -->
+
 <!-- ``` -->
 
 <!-- The model has only 4 predictors left and consistently greatCircleDistances is among the selected predictors. -->
