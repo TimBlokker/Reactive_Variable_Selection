@@ -108,7 +108,7 @@ uiOutput("response")
 ```
 
 ## Correlation Plot
-
+ 
 ```{r, fig.width = 20, fig.height = 20}
 renderPlot({
   cor_matrix<-cor(matrices_list[[input$matrix]])
@@ -117,6 +117,58 @@ renderPlot({
 width = 800, 
 height = 800)
 ```
+
+```{r}
+culDifClust<-reactive({
+  req(input$matrix)
+  d<-dist(abs(cor(matrices_list[[input$matrix]]%>% select(!starts_with("Trans")))))
+  hclust(d, method="average")  #AVARAGE LINK
+})
+
+renderPlot({
+# Rectangle dendrogram using ggplot2
+dend<-as.dendrogram(culDifClust())
+plot(dend,main = "Cluster Dendrogram", ylab="Average Link Distance", xlab="Predictors", )
+})
+```
+
+```{r}
+ numericInput(
+    inputId= "num_clusters",
+    label="Number of clusters:",
+    value=3,
+    min=1)
+
+
+culDif.gp <- reactive({
+  cutree(culDifClust(),k=input$num_clusters)
+})
+
+clusterd<-reactive({
+  data.frame("Cluster_num"=culDif.gp(), "Predictors"=names(culDif.gp()))
+})
+
+ renderTable({
+   clusterd()%>% 
+     group_by(Cluster_num) %>%
+     summarise(Predictors=paste0(Predictors, collapse=", "))
+ })
+
+```
+
+<!-- ```{r} -->
+<!-- renderPlot({ -->
+<!--   library(rpart) -->
+<!--   library(rpart.plot) -->
+<!--   #Use rpart function with built in cross-validation and selection of best cp value -->
+<!--   rpart=rpart(as.factor(clusterd()$V1)~., data=clusterd()) -->
+<!--   print(rpart, digits=2, minlength=10, spaces=4) -->
+<!--   printcp(rpart) -->
+<!--   par(mfrow=c(1,2)) -->
+<!--   prp(rpart, type = 4, extra = 101, fallen.leaves = T,round = 2, space = -1, varlen = 5) -->
+<!--   plotcp(rpart) -->
+<!-- }) -->
+<!-- ``` -->
 
 ## Ordinary Least Squares Regression
 
@@ -166,9 +218,15 @@ lm_regsubsets<-reactive({
   lm_regsubsets
 })
 
-renderPrint({
-  summary(lm_regsubsets())
-})
+selectInput(
+  inputId="crit.plot",
+  label="Selection criterium:",
+  choices=c("bic", "Cp", "r2", "adjr2"),
+  selected="bic"
+)
+renderPlot({
+  plot(lm_regsubsets(),scale=input$crit.plot)
+  })
 ```
 
 <!-- ```{r} -->
@@ -224,7 +282,7 @@ renderPrint({
 
 BIC is more stringent then the other, also you see how RSS and R² are not valid selection criteriums since they strictly improve with additionaly predictors.
 
-### Cross-validation as "criterium"
+## Cross-validation as "criterium"
 
 #### Define a few functions to keep it readable
 
@@ -310,7 +368,7 @@ renderPrint({
 ```
 
 
-### The best model
+## The best model
 ```{r}
 output$coefs<-renderUI({
   numericInput(
