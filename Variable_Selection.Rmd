@@ -14,6 +14,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(leaps)
 library(corrplot)
 library(dplyr)
+library(rpart)
+library(rpart.plot)
 ```
 
 ```{r}
@@ -70,8 +72,9 @@ transition_distances_influenza_ml <- transition_distances_influenza_ml[!colnames
 transition_distances_influenza_tt <- transition_distances_influenza_tt[colnames(transition_distances_influenza_tt)!="Key"]
 ```
 
+
 ```{r}
-matrices_list <- list(
+matrices_list_x <- list(
   "transition_distances_rabies_mp"= transition_distances_rabies_mp ,
    "transition_distances_rabies_ml" = transition_distances_rabies_ml ,
    "transition_distances_rabies_tt" = transition_distances_rabies_tt ,
@@ -87,13 +90,62 @@ matrices_list <- list(
 )
 ```
 
+```{r}
+checkboxInput(
+  inputId="standardize",
+  label="Standardize predictors",
+  value=FALSE
+)
+```
+
+
+```{r}
+#'Function to stadardize predictor variables
+#'@param df dataframe to standardize
+#'@return dataframe with standardized predictor variable
+standardize_pred<-function(df, response="Transition" ){
+     response_df<-save_response(df, response)
+     df<-df%>%select(!starts_with(response))
+     df<-sweep(df,2, apply(df, 2, var), "/")
+     df<-sweep(df,2, apply(df, 2, mean), "-")
+     merge_response(response_df, df)
+}
+
+save_response<-function(df, response){
+  df%>%select(starts_with(response))
+}
+
+merge_response<-function(df1, df2){
+  data.frame(df1, df2)
+}
+
+matrices_list<-reactive({
+  if(!is.null(input$standardize)){
+  if(input$standardize==TRUE){
+    return(lapply(matrices_list_x, standardize_pred))
+  }
+  return(matrices_list_x)
+  }
+})
+
+observeEvent(input$standardize,{
+  matrices_list()
+})
+
+```
+
 ## Choose matrix to analyze
 
 ```{r}
-selectInput("matrix",
-            label = "Transition and Distances Matrix",
-            choices =  names(matrices_list))
+output$input<-renderUI({
+  selectInput("matrix",
+              label = "Transition and Distances Matrix",
+              choices =  names(matrices_list())
+  )
+})
+uiOutput("input")
 ```
+
 
 ```{r}
 
@@ -101,7 +153,7 @@ output$response <-renderUI({
   req(input$matrix)
   selectInput("response",
             label = "Response variable",
-            choices= colnames(matrices_list[[input$matrix]] %>% dplyr::select(starts_with("Transition"))))
+            choices= colnames(matrices_list()[[input$matrix]] %>% dplyr::select(starts_with("Transition"))))
     })
 
 uiOutput("response")
@@ -111,7 +163,8 @@ uiOutput("response")
  
 ```{r, fig.width = 20, fig.height = 20}
 renderPlot({
-  cor_matrix<-cor(matrices_list[[input$matrix]])
+  req(input$matrix)
+  cor_matrix<-cor(matrices_list()[[input$matrix]])
   corrplot::corrplot(cor_matrix, type="upper", order="hclust", title = input$matrix, tl.cex = 1.5)
 },
 width = 800, 
@@ -121,16 +174,17 @@ height = 800)
 ```{r}
 culDifClust<-reactive({
   req(input$matrix)
-  d<-dist(abs(cor(matrices_list[[input$matrix]]%>% select(!starts_with("Trans")))))
+  d<-dist(1-abs(cor(matrices_list()[[input$matrix]]%>% select(!starts_with("Trans")))))
   hclust(d, method="average")  #AVARAGE LINK
 })
 
 renderPlot({
 # Rectangle dendrogram using ggplot2
 dend<-as.dendrogram(culDifClust())
-plot(dend,main = "Cluster Dendrogram", ylab="Average Link Distance", xlab="Predictors", )
+ggdendro::ggdendrogram(dend) 
 })
 ```
+
 
 ```{r}
  numericInput(
@@ -139,13 +193,12 @@ plot(dend,main = "Cluster Dendrogram", ylab="Average Link Distance", xlab="Predi
     value=3,
     min=1)
 
-
 culDif.gp <- reactive({
   cutree(culDifClust(),k=input$num_clusters)
 })
 
 clusterd<-reactive({
-  data.frame("Cluster_num"=culDif.gp(), "Predictors"=names(culDif.gp()))
+  data.frame("Cluster_num"=culDif.gp(), abs(cor(matrices_list()[[input$matrix]]%>% select(!starts_with("Trans")))), "Predictors"=names(culDif.gp()))
 })
 
  renderTable({
@@ -156,29 +209,15 @@ clusterd<-reactive({
 
 ```
 
-<!-- ```{r} -->
-<!-- renderPlot({ -->
-<!--   library(rpart) -->
-<!--   library(rpart.plot) -->
-<!--   #Use rpart function with built in cross-validation and selection of best cp value -->
-<!--   rpart=rpart(as.factor(clusterd()$V1)~., data=clusterd()) -->
-<!--   print(rpart, digits=2, minlength=10, spaces=4) -->
-<!--   printcp(rpart) -->
-<!--   par(mfrow=c(1,2)) -->
-<!--   prp(rpart, type = 4, extra = 101, fallen.leaves = T,round = 2, space = -1, varlen = 5) -->
-<!--   plotcp(rpart) -->
-<!-- }) -->
-<!-- ``` -->
-
 ## Ordinary Least Squares Regression
 
 ```{r}
 lm_ols<-reactive({
   req(input$response, input$matrix)
   f<-as.formula(paste0(input$response, "~",
-                       paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
+                       paste(colnames(matrices_list()[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
   
-  lm <- lm( formula=f, data=matrices_list[[input$matrix]])
+  lm <- lm( formula=f, data=matrices_list()[[input$matrix]])
 
   lm[["call"]][["formula"]]<-eval(lm[["call"]][["formula"]])
   lm[["call"]][["data"]]<-eval(input$matrix)
@@ -208,12 +247,12 @@ lm_regsubsets<-reactive({
   req(input$response, input$matrix)
   lm_regsubsets <- leaps::regsubsets(
      x=as.formula(paste0(input$response, "~", 
-                       paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+"))),
-     data=matrices_list[[input$matrix]],
-     nvmax = min(length(colnames(matrices_list[[input$matrix]]))),
+                       paste(colnames(matrices_list()[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+"))),
+     data=matrices_list()[[input$matrix]],
+     nvmax = min(length(colnames(matrices_list()[[input$matrix]]))),
      method=input$step_method)
     
-  lm_regsubsets[["call"]][[2]]<-as.formula(paste0(input$response, "~", paste(colnames(matrices_list[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
+  lm_regsubsets[["call"]][[2]]<-as.formula(paste0(input$response, "~", paste(colnames(matrices_list()[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
  # lm_regsubsets[["call"]][[3]]<-eval(input$matrix) 
   lm_regsubsets
 })
@@ -225,32 +264,11 @@ selectInput(
   selected="bic"
 )
 renderPlot({
+  req(input$crit.plot)
   plot(lm_regsubsets(),scale=input$crit.plot)
   })
 ```
 
-<!-- ```{r} -->
-
-<!-- library(dplyr) -->
-
-<!--  lm_regsubsets2 <- leaps::regsubsets( -->
-
-<!--       x=as.formula(paste0("Transitions", "~", -->
-
-<!--                         paste(colnames(matrices_list[["transition_distances_influenza_tt"]]%>%select(!starts_with("Trans"))), collapse = "+"))), -->
-
-<!--      data=matrices_list[["transition_distances_influenza_tt"]], -->
-
-<!--      nvmax = min(10, length(colnames(matrices_list[["transition_distances_influenza_tt"]]))), -->
-<!--       method="forward") -->
-
-<!--  sum_regsubsets2<-summary(lm_regsubsets2) -->
-
-<!--  sum_regsubsets2 -->
-
-<!--  names(sum_regsubsets2) -->
-
-<!-- ``` -->
 
 ### Select the criterium
 
@@ -328,9 +346,9 @@ mean_cv_errors<-reactive({
   k=input$folds #10 folds
   set.seed(1) #random seed
   
-  predictors<-matrices_list[[input$matrix]]%>%
+  predictors<-matrices_list()[[input$matrix]]%>%
     select(!starts_with("Transition"))
-  data<-matrices_list[[input$matrix]]%>%
+  data<-matrices_list()[[input$matrix]]%>%
     select(c(!starts_with("Transition"),matches(input$response)))
   
   folds=sample(1:k, nrow(data), replace=T) #assigning numbers from 1:10 to each row in the dataframe : these are the folds
@@ -367,7 +385,6 @@ renderPrint({
 })
 ```
 
-
 ## The best model
 ```{r}
 output$coefs<-renderUI({
@@ -388,6 +405,40 @@ renderPrint({
 ```
 
 
+```{r}
+lm_best<-reactive({
+  req(input$number_of_vars)
+  predictors<-names(coef(lm_regsubsets(), input$number_of_vars))[2:(input$number_of_vars+1)]
+  f<-as.formula(paste0(input$response, "~",
+                            paste(predictors, collapse = "+")))
+  data<-matrices_list()[[input$matrix]]%>%
+      select(c(!starts_with("Transition"),matches(input$response)))
+  lm_best<-lm(f, data=data)
+  lm_best[["call"]][["formula"]]<-eval(lm_best[["call"]][["formula"]])
+  lm_best[["call"]][["data"]]<-eval(input$matrix)
+  lm_best
+})
+
+renderPrint(
+  summary(lm_best())
+)
+```
+
+<!-- ```{r} -->
+
+<!-- library(dplyr) -->
+<!--  lm_regsubsets2 <- leaps::regsubsets( -->
+<!--       x=as.formula(paste0("Transitions", "~", -->
+<!--                         paste(colnames(matrices_list_x[["transition_distances_influenza_tt"]]%>%select(!starts_with("Trans"))), collapse = "+"))), -->
+<!--      data=matrices_list_x[["transition_distances_influenza_tt"]], -->
+<!--      nvmax = min(10, length(colnames(matrices_list_x[["transition_distances_influenza_tt"]]))), -->
+<!--       method="forward") -->
+<!--  sum_regsubsets2<-summary(lm_regsubsets2) -->
+<!--  sum_regsubsets2 -->
+<!--  names(sum_regsubsets2) -->
+<!-- paste0(names(coef(lm_regsubsets2, 4))[2:5], collapse="+") -->
+
+<!-- ``` -->
 
 
 ## Subdivide in train and test 
