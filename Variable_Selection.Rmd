@@ -14,8 +14,8 @@ knitr::opts_chunk$set(echo = TRUE)
 library(leaps)
 library(corrplot)
 library(dplyr)
-library(rpart)
-library(rpart.plot)
+library(glmnet) #lasso
+library(MASS) #MASS::select interferes with dplyr::select, so need to call all dplyr::select calls with dplyr::select to make clear that we want to use dplyr::select and not MASS::select
 ```
 
 ```{r}
@@ -105,14 +105,14 @@ checkboxInput(
 #'@return dataframe with standardized predictor variable
 standardize_pred<-function(df, response="Transition" ){
      response_df<-save_response(df, response)
-     df<-df%>%select(!starts_with(response))
+     df<-df%>%dplyr::select(!starts_with(response))
      df<-sweep(df,2, apply(df, 2, var), "/")
      df<-sweep(df,2, apply(df, 2, mean), "-")
      merge_response(response_df, df)
 }
 
 save_response<-function(df, response){
-  df%>%select(starts_with(response))
+  df%>%dplyr::select(starts_with(response))
 }
 
 merge_response<-function(df1, df2){
@@ -171,10 +171,34 @@ width = 800,
 height = 800)
 ```
 
+## Define reactives to build the regression calls with
+
+```{r}
+predictors<-reactive({
+  req(input$matrix)
+  matrices_list()[[input$matrix]]%>%
+    dplyr::select(!starts_with("Transition"))
+})
+
+f<-reactive({
+  req(input$matrix, input$response)
+  as.formula(paste0(input$response, "~",
+                       paste(colnames(predictors()),
+                             collapse = "+")))
+})
+
+data<-reactive({
+  req(input$response, input$matrix)
+  matrices_list()[[input$matrix]]%>%
+     dplyr::select(c(!starts_with("Transition"),matches(input$response)))
+})
+```
+
+
 ```{r}
 culDifClust<-reactive({
-  req(input$matrix)
-  d<-dist(1-abs(cor(matrices_list()[[input$matrix]]%>% select(!starts_with("Trans")))))
+  req(input$response, input$matrix)
+  d<-dist(1-abs(cor(predictors())))
   hclust(d, method="average")  #AVARAGE LINK
 })
 
@@ -198,7 +222,7 @@ culDif.gp <- reactive({
 })
 
 clusterd<-reactive({
-  data.frame("Cluster_num"=culDif.gp(), abs(cor(matrices_list()[[input$matrix]]%>% select(!starts_with("Trans")))), "Predictors"=names(culDif.gp()))
+  data.frame("Cluster_num"=culDif.gp(), abs(cor(predictors())), "Predictors"=names(culDif.gp()))
 })
 
  renderTable({
@@ -209,23 +233,22 @@ clusterd<-reactive({
 
 ```
 
+
+
 ## Ordinary Least Squares Regression
 
 ```{r}
 lm_ols<-reactive({
   req(input$response, input$matrix)
-  f<-as.formula(paste0(input$response, "~",
-                       paste(colnames(matrices_list()[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
-  
-  lm <- lm( formula=f, data=matrices_list()[[input$matrix]])
-
+  lm <- lm( formula=f(), data=data())
   lm[["call"]][["formula"]]<-eval(lm[["call"]][["formula"]])
   lm[["call"]][["data"]]<-eval(input$matrix)
   lm
 })
 
 renderPrint({
-  summary(lm_ols())
+
+  summary.lm(lm_ols())
 })
 
 ```
@@ -246,17 +269,20 @@ The variable to be included is marked with an asterix:
 lm_regsubsets<-reactive({
   req(input$response, input$matrix)
   lm_regsubsets <- leaps::regsubsets(
-     x=as.formula(paste0(input$response, "~", 
-                       paste(colnames(matrices_list()[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+"))),
-     data=matrices_list()[[input$matrix]],
-     nvmax = min(length(colnames(matrices_list()[[input$matrix]]))),
+     x=f(),
+     data=data(),
+     nvmax = length(colnames(data())),
      method=input$step_method)
     
-  lm_regsubsets[["call"]][[2]]<-as.formula(paste0(input$response, "~", paste(colnames(matrices_list()[[input$matrix]]%>%select(!starts_with("Trans"))), collapse = "+")))
- # lm_regsubsets[["call"]][[3]]<-eval(input$matrix) 
+  lm_regsubsets[["call"]][[2]]<-f()
+  #lm_regsubsets[["call"]][[3]]<-eval(data()) 
   lm_regsubsets
 })
 
+sum_regsubsets<-reactive({
+  req(lm_regsubsets())
+  summary(lm_regsubsets())
+})
 selectInput(
   inputId="crit.plot",
   label="Selection criterium:",
@@ -280,8 +306,7 @@ selectInput("selection_crit",
 
 ```{r}
 renderPlot({
-  sum_regsubsets<-summary(lm_regsubsets())
-  plot(get(input$selection_crit, sum_regsubsets), xlab="Number of variables", ylab=input$selection_crit)
+  plot(get(input$selection_crit, sum_regsubsets()), xlab="Number of variables", ylab=input$selection_crit)
 })
 ```
 
@@ -289,10 +314,11 @@ renderPlot({
 
 ```{r}
 renderPrint({
+  req(input$selection_crit, sum_regsubsets())
   if(input$selection_crit %in% c("cp", "bic", "rss")){
-    which(summary(lm_regsubsets())[[input$selection_crit]]==min(summary(lm_regsubsets())[[input$selection_crit]]))
+    which(sum_regsubsets()[[input$selection_crit]]==min(sum_regsubsets()[[input$selection_crit]])) 
   }else{
-    which(summary(lm_regsubsets())[[input$selection_crit]]==max(summary(lm_regsubsets())[[input$selection_crit]]))
+    which(sum_regsubsets()[[input$selection_crit]]==max(sum_regsubsets()[[input$selection_crit]])) 
   }
 })
 
@@ -307,12 +333,12 @@ BIC is more stringent then the other, also you see how RSS and R² are not valid
 ```{r}
 #' Predict the response variable values for a given model including a given number of predictors and given new (test) data.
 #'
-#' @param regsubset_obj object of class regsubset that is contains the models of different sizes
+#' @param regsubset_obj object of class regsubset that contains the models of different sizes
 #' @param number_of_vars the size of the model to use for the predictions
 #' @param newdata test data to carry out the predictions on
-#' @return The matrix product of the model.matrix containing the selected variables (nxp) and the coefficient vector (px1) resulting in a nx1 vector with the values of the response variable for every 
-#' @credit Credit to the authors of the ILSR book
+#' @return The matrix product of the model.matrix containing the selected variables (n x p) and the coefficient vector (p x 1) resulting in a n x 1 vector with the values of the response variable for every 
 #' state transition
+#' @credit Credit to the authors of the ILSR book
 predict.regsubsets<-function(regsubset_obj,number_of_vars, newdata, f){
   mat<-model.matrix(f, newdata)
   coefi<-coef(regsubset_obj, number_of_vars)
@@ -346,26 +372,19 @@ mean_cv_errors<-reactive({
   k=input$folds #10 folds
   set.seed(1) #random seed
   
-  predictors<-matrices_list()[[input$matrix]]%>%
-    select(!starts_with("Transition"))
-  data<-matrices_list()[[input$matrix]]%>%
-    select(c(!starts_with("Transition"),matches(input$response)))
+  folds=sample(1:k, nrow(data()), replace=T) #assigning numbers from 1:10 to each row in the dataframe : these are the folds
+  cv_errors<-matrix(NA, k, dim(predictors())[2], dimnames = list(1:k, 1:dim(predictors())[2]))
   
-  folds=sample(1:k, nrow(data), replace=T) #assigning numbers from 1:10 to each row in the dataframe : these are the folds
-  cv_errors<-matrix(NA, k, dim(predictors)[2], dimnames = list(1:k, 1:dim(predictors)[2]))
-  f<-as.formula(paste0(input$response, "~",
-                          paste(colnames(predictors), collapse = "+")))
-  
-  for(test_fold in 1:k) {
+  for(validation_fold in 1:k) {
     best.fit<-leaps::regsubsets(
-      x=f,
-      data=data%>%filter(folds!=test_fold),
-      nvmax = dim(data)[2],
+      x=f(),
+      data=data()%>%dplyr::filter(folds!=validation_fold),
+      nvmax = dim(data())[2],
       method=input$step_method)
     
-    for(number_of_vars in 1:dim(predictors)[2]){
-      pred<-predict.regsubsets(best.fit, number_of_vars, data%>%filter(folds==test_fold),f)
-      cv_errors[test_fold, number_of_vars ] <-MSE(data%>%select(input$response)%>%filter(folds==test_fold), pred)
+    for(number_of_vars in 1:dim(predictors())[2]){
+      pred<-predict.regsubsets(best.fit, number_of_vars, data()%>%dplyr::filter(folds==validation_fold),f())
+      cv_errors[validation_fold, number_of_vars ] <-MSE(data()%>%dplyr::select(input$response)%>%dplyr::filter(folds==validation_fold), pred)
     }
   }
   apply(cv_errors, 2, mean) #column-wise mean, which is the mean across the folds for each size of the model
@@ -381,6 +400,7 @@ renderPlot(
 ### What is the best number of selected variables (also check plots): CV
 ```{r}
 renderPrint({
+  req(mean_cv_errors())
   which(mean_cv_errors()==min(mean_cv_errors()))
 })
 ```
@@ -388,10 +408,11 @@ renderPrint({
 ## The best model
 ```{r}
 output$coefs<-renderUI({
+  req(input$selection_crit, sum_regsubsets())
   numericInput(
     inputId= "number_of_vars",
     label="Get coefficients for selected number of var:",
-    value=which(summary(lm_regsubsets())[[input$selection_crit]]==max(summary(lm_regsubsets())[[input$selection_crit]])),
+    value=which(sum_regsubsets()[[input$selection_crit]]==max(sum_regsubsets()[[input$selection_crit]])), 
     min=1)
 })
 uiOutput("coefs")
@@ -407,29 +428,157 @@ renderPrint({
 
 ```{r}
 lm_best<-reactive({
-  req(input$number_of_vars)
+  req(input$number_of_vars, input$response, input$matrix)
   predictors<-names(coef(lm_regsubsets(), input$number_of_vars))[2:(input$number_of_vars+1)]
   f<-as.formula(paste0(input$response, "~",
                             paste(predictors, collapse = "+")))
-  data<-matrices_list()[[input$matrix]]%>%
-      select(c(!starts_with("Transition"),matches(input$response)))
-  lm_best<-lm(f, data=data)
+  lm_best<-lm(f, data=data())
   lm_best[["call"]][["formula"]]<-eval(lm_best[["call"]][["formula"]])
   lm_best[["call"]][["data"]]<-eval(input$matrix)
   lm_best
 })
 
 renderPrint(
-  summary(lm_best())
+  summary.lm(lm_best())
 )
+
+
 ```
+
+## Automatic stepwise selection approaches
+**AIC**
+
+This methods do not only go backwards or only forward but go stepwise back and forth (also called sequential replacement), which is meant to reduce the risk to get stuck in local optima.In the output each line corresponds to the AIC that would be achieved when excluding ("-") or including ("+") the predictor of that line. Every "step" the action (+ or -) is carried out that results in the lowest AIC. 
+
+For the rabies data set for the MP reconstruction we get a 3 variable model but we see that excluding "rangeOverlap" really only increases the AIC by 0.1 and so choosing the more parsimonous model with only "bodySize" and "hostDistances" is a an equally good model.
+For ML the 2-variable model is selected both by the treeTime method as the ML reconstruction implemented in the R package.For the Transition rates as response variable "hostDistances" is still included in the model but instead of "bodysize" the "rangeOverlap" predictor is included in the model. Standardization of the predictor variable does not change inclusion of predictors in the model but impacts the size of the coefficients.
+
+For the influenza dataset for every choice of the parameters the full model is selected, containing of "subsetDeff", subsetDgeo", "Dest_Pop_Size" and "Ori_Pop_Size".
+
+For the ebola dataset, the AIC criterium selects a large amount of predictors for transition rates as  reponse 16 and for transition as response 9. And across the reconstruction methods the variables selected for transition counts varies between ML and MP with "originPrec", "originTmpss" and "originPopSize" being additinally included for the ML methods.
+
+
+```{r}
+ output$k<-renderUI({
+ selectInput(
+    inputId="k_crit",
+    label="Input criterion",
+    choices=c("AIC (k=2)"=2, "BIC (k=log(n))"=log(nrow(data())))
+  )
+})
+uiOutput("k")
+```
+
+
+```{r}
+renderPrint({
+  req(input$k_crit)
+  MASS::stepAIC(
+    object = lm(f(), data=data()),
+    direction = "both",
+    trace=3,
+    k=as.numeric(input$k_crit))
+})
+```
+
+
+### Lasso selection
+
+```{r}
+cv_out<-reactive({
+  req(input$response, f(), data())
+  x <- model.matrix(object = f(), data = data())[,-1]
+  y <- data()[[input$response]]
+  grid<-10^seq(10,-2, length=100) #100 values of lambda covering the range 0.01 to 10^10
+
+  set.seed(1)
+  cv_out<-glmnet::cv.glmnet(x, y, alpha=1, lambda=grid, type.measure = "mse", nfolds = 10) #deviance a.k.a MSE
+  cv_out
+})
+
+renderPlot({
+  plot(cv_out())
+})
+
+renderTable({
+  req(input$response, f(), data())
+    x <- model.matrix(object = f(), data = data())[,-1]
+    y <- data()[[input$response]]
+    bestlam<-cv_out()$lambda.min
+    grid<-10^seq(10,-2, length=100) #100 values of lambda covering the range 0.01 to 10^10
+    out<-glmnet::glmnet(x,y,alpha=1, lambda=grid)
+    lasso.coef<-predict(out, s=bestlam, type="coefficients")
+    coefs<-lasso.coef[lasso.coef@i+1]
+    names_coefs<-lasso.coef@Dimnames[[1]][lasso.coef@i+1]
+    data.frame("Predictor"=names_coefs, "Coefficients"=coefs)
+})
+
+# library(plotmo)
+# plot_glmnet(out, xvar="lambda", xlim=c(-3,1), ylim=c(-2,2), col=1:25, label=T)
+# abline(v=log(bestlam), lty=2)
+```
+
+<!-- Best tuning parameter we can select based on the mean squared error/deviance as we also see in the plot above: -->
+
+<!-- ```{r} -->
+<!-- bestlam<-cv.out$lambda.min -->
+<!-- bestlam -->
+<!-- ``` -->
+
+<!-- Assessing how good the model is by predicting the number of transitions for the non-used test observations and then calculating the MSE with the real transitions. -->
+
+<!-- ```{r} -->
+<!-- lasso.pred<-predict(cv.out, s=bestlam, newx=x[test,]) -->
+<!-- mean((lasso.pred-y[test])^2) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- set.seed(1) -->
+<!-- out<-glmnet(x,y,alpha=1, lambda=0) -->
+<!-- lasso.coef<-predict(out, s=bestlam, type="coefficients")#[1:25] -->
+<!-- lasso.coef -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- pred<-predict(out,s=0, newx=x) -->
+<!-- cor.test(pred,y) -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+
+<!-- grid<-10^seq(10,-2, length=100) #100 values of lambda covering the range 0.01 to 10^10 -->
+<!-- x<-predictors() #this means everything except column 1, the intercept -->
+<!-- y<-input$response -->
+<!-- set.seed(1) -->
+<!-- train<-sample(1:nrow(x), nrow(x)/2) -->
+<!-- test<-(-train) -->
+<!-- y.test<-y[test] -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- library(dplyr) -->
+<!-- f<-as.formula(paste0("Transitions", "~", paste(colnames(matrices_list_x[["transition_distances_ebola_tt"]]%>%dplyr::select(!starts_with("Trans"))), collapse = "+"))) -->
+
+<!-- data=matrices_list_x[["transition_distances_ebola_tt"]] -->
+
+
+<!-- steps<-MASS::stepAIC( -->
+<!--     object = lm(f, data=data), -->
+<!--     direction = "both", -->
+<!--     trace=FALSE, -->
+<!--     k=2) -->
+<!-- ``` -->
 
 <!-- ```{r} -->
 
 <!-- library(dplyr) -->
 <!--  lm_regsubsets2 <- leaps::regsubsets( -->
 <!--       x=as.formula(paste0("Transitions", "~", -->
-<!--                         paste(colnames(matrices_list_x[["transition_distances_influenza_tt"]]%>%select(!starts_with("Trans"))), collapse = "+"))), -->
+<!--                         paste(colnames(matrices_list_x[["transition_distances_influenza_tt"]]%>%dplyr::select(!starts_with("Trans"))), collapse = "+"))), -->
 <!--      data=matrices_list_x[["transition_distances_influenza_tt"]], -->
 <!--      nvmax = min(10, length(colnames(matrices_list_x[["transition_distances_influenza_tt"]]))), -->
 <!--       method="forward") -->
@@ -441,7 +590,7 @@ renderPrint(
 <!-- ``` -->
 
 
-## Subdivide in train and test 
+## Subdivide in train and test to compare different approaches, different response, different variable selection techniques
 <!-- The training data can be used to train the model and subsequently we can assess the goodness of the model via the test data. -->
 <!-- ```{r} -->
 <!-- set.seed(1) #set a random seed for reproducability -->
@@ -451,86 +600,6 @@ renderPrint(
 <!-- ``` -->
 
 
-
-
-
-<!-- ### Lasso selection -->
-
-<!-- ```{r} -->
-
-<!-- library(glmnet) -->
-
-<!-- grid<-10^seq(10,-2, length=100) #100 values of lambda covering the range 0.01 to 10^10 -->
-
-<!-- x<-model.matrix(Transitions~., transition_distances[,2:27])[,-1] #this means everything except column 1, the intercept -->
-
-<!-- y<-transition_distances$Transitions -->
-
-<!-- set.seed(1) -->
-
-<!-- train<-sample(1:nrow(x), nrow(x)/2) -->
-
-<!-- test<-(-train) -->
-
-<!-- y.test<-y[test] -->
-
-<!-- ``` -->
-
-<!-- ```{r} -->
-
-<!-- set.seed(1) -->
-
-<!-- cv.out<-cv.glmnet(x[train,], y[train], alpha=1, type.measure = "deviance", nfolds = 10) #deviance a.k.a MSE -->
-
-<!-- plot(cv.out) -->
-
-<!-- ``` -->
-
-<!-- Best tuning parameter we can select based on the mean squared error/deviance as we also see in the plot above: -->
-
-<!-- ```{r} -->
-
-<!-- bestlam<-cv.out$lambda.min -->
-
-<!-- bestlam -->
-
-<!-- ``` -->
-
-<!-- Assessing how good the model is by predicting the number of transitions for the non-used test observations and then calculating the MSE with the real transitions. -->
-
-<!-- ```{r} -->
-
-<!-- lasso.pred<-predict(cv.out, s=bestlam, newx=x[test,]) -->
-
-<!-- mean((lasso.pred-y[test])^2) -->
-
-<!-- ``` -->
-
-<!-- ```{r} -->
-
-<!-- set.seed(1) -->
-
-<!-- out<-glmnet(x,y,alpha=1, lambda=0) -->
-
-<!-- lasso.coef<-predict(out, s=bestlam, type="coefficients")#[1:25] -->
-
-<!-- lasso.coef -->
-
-<!-- ``` -->
-
-<!-- ```{r} -->
-
-<!-- pred<-predict(out,s=0, newx=x) -->
-
-<!-- cor.test(pred,y) -->
-
-<!-- ``` -->
-
-<!-- ```{r} -->
-
-<!-- summary(lm(Transitions ~ . , data =transition_distances[,2:27]))$coefficients -->
-
-<!-- ``` -->
 
 <!-- ```{r} -->
 
