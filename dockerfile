@@ -34,13 +34,13 @@ RUN Rscript -e 'renv::restore()'
 
 
 #docker hub########################################################################
-#EXPOSE 3838
-#CMD ["R", "-e", "rmarkdown::run('./app/Variable_Selection.Rmd', shiny_args=list(host = '0.0.0.0', port = 3838))"]
+EXPOSE 3838
+CMD ["R", "-e", "rmarkdown::run('./app/Variable_Selection.Rmd', shiny_args=list(host = '0.0.0.0', port = 3838))"]
 #\dockerhub########################################################################
 
 ####horeku#########################################################################################               
-RUN rm -rf /var/lib/apt/lists/*              
-RUN useradd shiny_user
-USER shiny_user
-CMD ["R", "-e", "rmarkdown::run('./app/Variable_Selection.Rmd', shiny_args=list(host = '0.0.0.0', port = as.numeric(Sys.getenv('PORT'))))"]
+#RUN rm -rf /var/lib/apt/lists/*              
+#RUN useradd shiny_user
+#USER shiny_user
+#CMD ["R", "-e", "rmarkdown::run('./app/Variable_Selection.Rmd', shiny_args=list(host = '0.0.0.0', port = as.numeric(Sys.getenv('PORT'))))"]
 ####\horeku########################################################################################                 
