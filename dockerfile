@@ -1,7 +1,7 @@
 # Base image https://hub.docker.com/u/rocker/
 FROM rocker/shiny:latest
 
-# system libraries of general use
+## system libraries of general use
 ## install debian packages
 RUN apt-get update -qq && apt-get -y --no-install-recommends install \
     libxml2-dev \
