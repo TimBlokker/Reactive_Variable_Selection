@@ -561,17 +561,9 @@ renderPlot({
 ```
 
 ## Elastic Net
-
+###Caret package as helper
 
 ```{r}
-get_best_result <- function(caret_fit) {
-  best<-which(rownames(caret_fit$results) == rownames(caret_fit$bestTune))
-  best_result <- caret_fit$results[best, ]
-  rownames(best_result) <- NULL
-  best_result
-}
-
-
 elnet<-reactive({
   req(data(), f())
   set.seed(42)
@@ -587,64 +579,114 @@ elnet<-reactive({
 
 renderPrint({
   req(elnet())
-  get_best_result(elnet())
+  elnet()$bestTune
+})
+
+
+renderPrint({
+  req(elnet())
+  coef(elnet()$finalModel, elnet()$bestTune$lambda)
 })
 
 ```
 
-This output is not very satisfactory, it does not seem to be easy to get the selected variables and coefficients.
-These methods purely aim at prediction with optimized tuning parameters alpha and lambda.
+This is a relatively sparse model and I try to comapre it to the cv.glmnet function as before. I realized after a while that I am not getting an as good result because my lambda steps are not small enough but it gets very slow when I try to take very small steps. Maybe the algorithm for the caret package is more efficient? Or makes assumptions and might actually be less accurate.
+
 
 ```{r}
-# 
-# # https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html
-# 
-get_best_result <- function(caret_fit) {
-  best<-which(rownames(caret_fit$results) == rownames(caret_fit$bestTune))
-  best_result <- caret_fit$results[best, ]
-  rownames(best_result) <- NULL
-  best_result
-}
-f<-as.formula(paste0("Transitions", "~", paste(colnames(matrices_list_x[["transition_distances_ebola_tt"]]%>%dplyr::select(!starts_with("Trans"))), collapse = "+")))
-data=matrices_list_x[["transition_distances_ebola_tt"]]
-
-
-set.seed(42)
-cv_10 = caret::trainControl(method = "cv", number =10)
-elnet <- caret::train(
-f, data = data,
-method = "glmnet",
-trControl = cv_10)
-
-
-get_best_result(elnet)
-
-grid<-10^seq(5,-5, length=100) #100 values of lambda covering the range 0.01 to 10^10
-
-foldid=sample(1:10,size=length(y),replace=TRUE)
-
+# https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html
 
 alpha.seq=seq(0,1,0.1)
+grid<-10^seq(3,-3, length=1000) #100 values of lambda covering the range 0.01 to 10^10
 
-cv.alpha<-lapply(alpha.seq, function(alpha) glmnet::cv.glmnet(x,y,lambda=grid ,foldid=foldid,alpha=alpha))
+alp_lbd_cvm<-reactive({
+  req(cv.alpha())
+  min.cvm<-sapply(cv.alpha(),function(alpha) min(alpha$cvm))
+  min.lambda<-sapply(cv.alpha(),function(alpha) alpha$lambda.min)
+  alp_lbd_cvm<-data.frame("alpha"=alpha.seq, "lambda"=min.lambda, "cvm"= min.cvm)
+  alp_lbd_cvm
+})
 
-par(mfrow=c(5,2))
-lapply(cv.alpha, function(alpha) plot(alpha))
-plot(cv1);
-plot(cv.5);
-plot(cv0)
-plot(log(cv1$lambda),cv1$cvm,pch=19,col="red",xlab="log(Lambda)",ylab=cv1$name)
-lapply(cv.alpha, function(alpha) points(log(alpha$lambda),alpha$cvm,pch=19,col="grey"))
-points(log(cv0$lambda),cv0$cvm,pch=19,col="blue")
-legend("topleft",legend=c("alpha= 1","alpha= .5","alpha 0"),pch=19,col=c("red","grey","blue"))
-
-x <- model.matrix(object = f, data = data)[,-1]
-y <- data[["Transitions"]]
-out<-glmnet::glmnet(x,y,alpha=0.5, standardize =T)
-
-
-
+cv.alpha<-reactive({
+  x <- model.matrix(object = f(), data = data())[,-1]
+  y <- data()[[input$response]]
+  #for each of the 20 values of alpha and the 1000 values for lambda the model is fit 10 times (leaving out 1 fold each time). So in total we have 200.000 fitted the model (20 (alpha) *10 (cv-fold)* 1000 (lambda) = 200.000
+  foldid=sample(1:10,size=length(y),replace=TRUE) #TODO keeping foldid constant - to optimize alpha and lambda on same folds??? - check this
+  cv.alpha<-lapply(alpha.seq, function(alpha) glmnet::cv.glmnet(x,y ,lambda=grid,foldid=foldid,alpha=alpha))
+  cv.alpha
+})
 ```
+
+
+```{r fig.width=20, fig.height=20}
+##plot lambda versus cvm
+renderPlot({
+par(mfrow=c(5,2))
+lapply(cv.alpha(), function(alpha) plot(alpha)) # auto sized
+})
+
+renderPlot({
+  par(mfrow=c(5,2))
+  lapply(cv.alpha(), function(alpha) plot(alpha, ylim=c(0.78,0.85))) # zoomed in, not seeing error bars completley anymore
+})
+
+renderPlot({
+  par(mfrow=c(1,1))
+  coul <- RColorBrewer::brewer.pal(9, name ="Set3" ) 
+  coul <- colorRampPalette(coul)(21)
+  counter=1
+  plot(log(cv.alpha()[[counter]]$lambda),cv.alpha()[[counter]]$cvm,pch=1,type="b",col=coul[counter],xlab="log(Lambda)",ylab="CVM - Mean CV error", xlim=c(-10,5))
+  lapply(cv.alpha()[-1], function(alpha) {
+  counter<<-counter+1
+  points(log(alpha$lambda),alpha$cvm,type="b",col=coul[counter])
+})
+  legend("topleft",legend=c(alpha.seq),pch=1,col=coul, title = "alpha")
+})
+
+renderPlot({
+  req(alp_lbd_cvm())
+  print(alp_lbd_cvm())
+  print(class(alp_lbd_cvm()$lambda))
+  plot(alp_lbd_cvm()$cvm, log(alp_lbd_cvm()$lambda))
+  points(min(alp_lbd_cvm()$cvm), log(alp_lbd_cvm()$lambda[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm))]), col="red") 
+})
+
+renderPlot({
+plot(alp_lbd_cvm()$cvm ~ alp_lbd_cvm()$alpha)
+points(min(alp_lbd_cvm()$cvm)~ alp_lbd_cvm()$alpha[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm))], col="red") 
+})
+
+
+renderPlot({
+  plot(alp_lbd_cvm()$alpha, alp_lbd_cvm()$lambda)
+})
+
+renderPrint({
+  x <- model.matrix(object = f(), data = data())[,-1]
+  y <- data()[[input$response]]
+  best_tune_cv.glmnet<-alp_lbd_cvm()[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm)),]
+  out<-glmnet::glmnet(x,y,alpha=best_tune_cv.glmnet$alpha, lambda=best_tune_cv.glmnet$lambda, standardize =T)
+  out$beta
+})
+
+renderPrint({
+  x <- model.matrix(object = f(), data = data())[,-1]
+  y <- data()[[input$response]]
+ out<-glmnet::glmnet(x,y,alpha=elnet()$bestTune$alpha, lambda=elnet()$bestTune$lambda, standardize =T)
+ out$beta 
+})
+
+
+renderPrint({
+  alp_lbd_cvm()[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm)),]
+})
+```
+
+<!-- ```{r} -->
+<!-- df<-data.frame(a_l_c) -->
+<!-- fig <- plotly::plot_ly(df, x = ~alpha.seq, y = ~min.lambda, z = ~min.cvm, ) -->
+<!-- fig -->
+<!-- ``` -->
 
 <!-- ```{r} -->
 
