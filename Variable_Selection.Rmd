@@ -18,9 +18,9 @@ library(glmnet) #lasso
 library(MASS) #MASS::select interferes with dplyr::select, so need to call all dplyr::select calls with dplyr::select to make clear that we want to use dplyr::select and not MASS::select
 ```
 
-```{r}
-getwd()
-```
+<!-- # ```{r} -->
+<!-- # getwd() -->
+<!-- # ``` -->
 
 ## Reading the matrices
 
@@ -93,6 +93,13 @@ matrices_list_x <- list(
 ```
 
 ```{r}
+renderTable({
+  req(input$matrix, matrices_list)
+  head(matrices_list()[[input$matrix]])
+})
+```
+
+```{r}
 checkboxInput(
   inputId="standardize",
   label="Standardize predictors",
@@ -106,6 +113,9 @@ checkboxInput(
 #'@return dataframe with standardized predictor variable
 standardize_pred<-function(df){
   req(input$response)
+  if(input$standardize==FALSE){
+    return(df)
+  }
      response_df<-data.frame(get(input$response, df))
      colnames(response_df)<-input$response
      binaries<-apply(df,2, function(variable) is.binary(variable))
@@ -147,10 +157,12 @@ data<-reactive({
   if(input$remove_zero==TRUE){
     matrices_list()[[input$matrix]]%>%
       filter(Transitions!=0)%>%
-      dplyr::select(c(!starts_with("Transition"),matches(input$response)))
+      dplyr::select(c(!starts_with("Transition"),matches(input$response)))%>%
+      standardize_pred(.)
   }else if(input$remove_zero==FALSE){
     matrices_list()[[input$matrix]]%>%
-      dplyr::select(c(!starts_with("Transition"),matches(input$response)))
+      dplyr::select(c(!starts_with("Transition"),matches(input$response)))%>%
+      standardize_pred(.)
   }
 })
 ```
@@ -166,6 +178,7 @@ output$input<-renderUI({
 })
 uiOutput("input")
 ```
+
 
 ```{r}
 
@@ -244,7 +257,10 @@ For the rabies dataset we seethat rangeOverlap is very seperate from the other v
 
 Here the number of clusters can be selected, then I imagine cutting the tree horizontally resulting in 2 tips and so you have 2 clusters of variables.
 
-```{culDif.gp <- reactive({}
+```{r}
+
+
+culDif.gp <- reactive({
   cutree(culDifClust(),k=input$num_clusters)
 })
 
@@ -257,7 +273,6 @@ clusterd<-reactive({
      group_by(Cluster_num) %>%
      summarise(Predictors=paste0(Predictors, collapse=", "))
  })
-
 ```
 
 ## Define reactives to build the regression calls with
@@ -273,7 +288,7 @@ checkboxInput(
 ```{r}
 predictors<-reactive({
   req(input$matrix)
-  matrices_list()[[input$matrix]]%>%
+  data()%>%
     dplyr::select(!starts_with("Transition"))
 })
 
@@ -450,6 +465,10 @@ mean_cv_errors<-reactive({
 renderPlot(
   plot(mean_cv_errors())
 )
+
+renderPrint(
+  mean_cv_errors()
+)
 ```
 
 ### What is the best number of selected variables (also check plots): CV
@@ -601,7 +620,7 @@ renderPlot({
 
 ## Elastic Net
 
-\#\#\#Caret package as helper
+### Caret package as helper to tune alpha and lambda
 
 ```{r}
 elnet<-reactive({
@@ -635,6 +654,8 @@ I realized after a while that I am not getting an as good result because my lamb
 Maybe the algorithm for the caret package is more efficient?
 Or makes assumptions and might actually be less accurate.
 
+## Finding tuning parameters via cv.glmnet
+
 ```{r}
 # https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html
 
@@ -653,7 +674,7 @@ cv.alpha<-reactive({
   x <- model.matrix(object = f(), data = data())[,-1]
   y <- data()[[input$response]]
   #for each of the 20 values of alpha and the 1000 values for lambda the model is fit 10 times (leaving out 1 fold each time). So in total we have 200.000 fitted the model (20 (alpha) *10 (cv-fold)* 1000 (lambda) = 200.000
-  foldid=sample(1:10,size=length(y),replace=TRUE) #TODO keeping foldid constant - to optimize alpha and lambda on same folds??? - check this
+  foldid=sample(1:10,size=length(y),replace=TRUE) #keeping foldid constant - to optimize alpha, this uses the same 10 folds for every alpha in the alpha sequence.
   cv.alpha<-lapply(alpha.seq, function(alpha) glmnet::cv.glmnet(x,y ,lambda=grid,foldid=foldid,alpha=alpha))
   cv.alpha
 })
@@ -685,6 +706,8 @@ cv.alpha<-reactive({
 
 <!-- ``` -->
 
+## Lambda versus mean CV error for each alpha value 
+
 ```{r,fig.width = 20, fig.height = 40}
 renderPlot({
   par(mfrow=c(1,1))
@@ -700,6 +723,7 @@ renderPlot({
 })
 ```
 
+## Lambda versus Mean CV error
 ```{r,fig.width = 20, fig.height = 40}
 renderPlot({
   req(alp_lbd_cvm())
@@ -708,6 +732,7 @@ renderPlot({
 })
 ```
 
+## ALpha versus Mean CV error
 ```{r,fig.width = 20, fig.height = 40}
 renderPlot({
 plot(alp_lbd_cvm()$cvm ~ alp_lbd_cvm()$alpha, main="Mean CV error versus alpha")
@@ -725,6 +750,7 @@ renderPrint({
 })
 ```
 
+### Caret tuned alpha and lambda in glmnet
 ```{r,fig.width = 20, fig.height = 40}
 renderPrint({
   x <- model.matrix(object = f(), data = data())[,-1]
@@ -734,6 +760,7 @@ renderPrint({
 })
 ```
 
+### Glmnet tuned alpha and lambda
 ```{r,fig.width = 20, fig.height = 40}
 renderPrint({
   alp_lbd_cvm()[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm)),]
