@@ -18,9 +18,9 @@ library(glmnet) #lasso
 library(MASS) #MASS::select interferes with dplyr::select, so need to call all dplyr::select calls with dplyr::select to make clear that we want to use dplyr::select and not MASS::select
 ```
 
-```{r}
-getwd()
-```
+<!-- # ```{r} -->
+<!-- # getwd() -->
+<!-- # ``` -->
 
 ## Reading the matrices
 
@@ -93,6 +93,13 @@ matrices_list_x <- list(
 ```
 
 ```{r}
+renderTable({
+  req(input$matrix, matrices_list)
+  head(matrices_list()[[input$matrix]])
+})
+```
+
+```{r}
 checkboxInput(
   inputId="standardize",
   label="Standardize predictors",
@@ -106,6 +113,9 @@ checkboxInput(
 #'@return dataframe with standardized predictor variable
 standardize_pred<-function(df){
   req(input$response)
+  if(input$standardize==FALSE){
+    return(df)
+  }
      response_df<-data.frame(get(input$response, df))
      colnames(response_df)<-input$response
      binaries<-apply(df,2, function(variable) is.binary(variable))
@@ -137,6 +147,24 @@ observeEvent(input$standardize,{
   matrices_list()
 })
 
+checkboxInput(
+  inputId="remove_zero",
+  label="Exclude zero transitions",
+  value=TRUE
+)
+data<-reactive({
+  req(input$response, input$matrix)
+  if(input$remove_zero==TRUE){
+    matrices_list()[[input$matrix]]%>%
+      filter(Transitions!=0)%>%
+      dplyr::select(c(!starts_with("Transition"),matches(input$response)))%>%
+      standardize_pred(.)
+  }else if(input$remove_zero==FALSE){
+    matrices_list()[[input$matrix]]%>%
+      dplyr::select(c(!starts_with("Transition"),matches(input$response)))%>%
+      standardize_pred(.)
+  }
+})
 ```
 
 ## Choose matrix to analyze
@@ -150,6 +178,7 @@ output$input<-renderUI({
 })
 uiOutput("input")
 ```
+
 
 ```{r}
 
@@ -168,12 +197,32 @@ uiOutput("response")
 ```{r, fig.width = 20, fig.height = 20}
 renderPlot({
   req(input$matrix)
-  cor_matrix<-cor(matrices_list()[[input$matrix]])
-  corrplot::corrplot(cor_matrix, type="upper", order="hclust", title = input$matrix, tl.cex = 1.5)
+  cor_matrix<-cor(data()[,order(colnames(data()))], method = "pearson")
+  M<-corrplot::corrplot(cor_matrix, type="upper",order="original" , title = input$matrix, tl.cex = 1.5, addCoef.col = "black", diag = FALSE)
+  M
 },
-width = 800, 
-height = 800)
+width = 1000, 
+height = 1000)
 ```
+
+**Rabies - MCC**
+
+**Correlation interpretation on full dataset or 0 transitions excluded?**
+
+The rabies data set was analyzed by Faria et al and the main predictors of rabies virus transfer from host to host were found to be genetic distance between hosts and geographical range overlap.
+
+Correlation of the variables depend on whether zero transitions are included or not but the general correlations remain the same for this dataset.
+In both cases roostOverlap and wingLoading are strongly anti-correlated, as well as roostOverlap and hostDistances.
+The strongest positive correlation can be seen between wingAspectRatio and wingLoading but also hostDistances and wingLoading are positively correlated.
+From this plot we can also infer a light positive correlation between the response ("Transitions") and rangeOverlap and a negative correlation with all other variables, the strongest one being the genetic host distances.
+
+The same correlations are seen when inferring the ancestral states using ML implemented in the program treeTime.
+Using the ML implementation in the ape package also results in a similar correlation structure, however, the positive correlation between the "Transition count" and the range overlap is weaker than before.
+For the reconstruction via MP the correlation between range overlap and Transition count is again a bit stronger.
+
+Finally using the transition rates as response variable inferred from the treeTime program give a different picture and the the strongest correlation between predictors and response is then rangeOverlap, which was positively correlated before, followed by hostDistances.
+
+## Cluster Variables by 1-abs(correlation)
 
 ```{r}
 culDifClust<-reactive({
@@ -190,7 +239,13 @@ ggdendro::ggdendrogram(dend)
 
 ```
 
-## Cluster Variables by 1-abs(correlation)
+**Does this clustering make sense to you, or rather not use it in thesis?**
+
+I thought that the clustering of the variables could help identify more than pairwise correlations.
+Clustering is done one absolute pearson coefficients.
+And then works like UPGMA.
+
+For the rabies dataset we seethat rangeOverlap is very seperate from the other variables and was also the only variable that correlated positively with virus spread in contrast to the other variables and does not show none to light correlation with other variables.
 
 ```{r}
  numericInput(
@@ -198,6 +253,12 @@ ggdendro::ggdendrogram(dend)
     label="Number of clusters:",
     value=3,
     min=1)
+```
+
+Here the number of clusters can be selected, then I imagine cutting the tree horizontally resulting in 2 tips and so you have 2 clusters of variables.
+
+```{r}
+
 
 culDif.gp <- reactive({
   cutree(culDifClust(),k=input$num_clusters)
@@ -212,7 +273,6 @@ clusterd<-reactive({
      group_by(Cluster_num) %>%
      summarise(Predictors=paste0(Predictors, collapse=", "))
  })
-
 ```
 
 ## Define reactives to build the regression calls with
@@ -228,7 +288,7 @@ checkboxInput(
 ```{r}
 predictors<-reactive({
   req(input$matrix)
-  matrices_list()[[input$matrix]]%>%
+  data()%>%
     dplyr::select(!starts_with("Transition"))
 })
 
@@ -244,12 +304,6 @@ f<-reactive({
                              collapse = " + ")))
   }
   f
-})
-
-data<-reactive({
-  req(input$response, input$matrix)
-  matrices_list()[[input$matrix]]%>%
-     dplyr::select(c(!starts_with("Transition"),matches(input$response)))
 })
 ```
 
@@ -411,6 +465,10 @@ mean_cv_errors<-reactive({
 renderPlot(
   plot(mean_cv_errors())
 )
+
+renderPrint(
+  mean_cv_errors()
+)
 ```
 
 ### What is the best number of selected variables (also check plots): CV
@@ -561,7 +619,8 @@ renderPlot({
 ```
 
 ## Elastic Net
-###Caret package as helper
+
+### Caret package as helper to tune alpha and lambda
 
 ```{r}
 elnet<-reactive({
@@ -590,8 +649,12 @@ renderPrint({
 
 ```
 
-This is a relatively sparse model and I try to comapre it to the cv.glmnet function as before. I realized after a while that I am not getting an as good result because my lambda steps are not small enough but it gets very slow when I try to take very small steps. Maybe the algorithm for the caret package is more efficient? Or makes assumptions and might actually be less accurate.
+This is a relatively sparse model and I try to comapre it to the cv.glmnet function as before.
+I realized after a while that I am not getting an as good result because my lambda steps are not small enough but it gets very slow when I try to take very small steps.
+Maybe the algorithm for the caret package is more efficient?
+Or makes assumptions and might actually be less accurate.
 
+## Finding tuning parameters via cv.glmnet
 
 ```{r}
 # https://web.stanford.edu/~hastie/glmnet/glmnet_alpha.html
@@ -611,25 +674,41 @@ cv.alpha<-reactive({
   x <- model.matrix(object = f(), data = data())[,-1]
   y <- data()[[input$response]]
   #for each of the 20 values of alpha and the 1000 values for lambda the model is fit 10 times (leaving out 1 fold each time). So in total we have 200.000 fitted the model (20 (alpha) *10 (cv-fold)* 1000 (lambda) = 200.000
-  foldid=sample(1:10,size=length(y),replace=TRUE) #TODO keeping foldid constant - to optimize alpha and lambda on same folds??? - check this
+  foldid=sample(1:10,size=length(y),replace=TRUE) #keeping foldid constant - to optimize alpha, this uses the same 10 folds for every alpha in the alpha sequence.
   cv.alpha<-lapply(alpha.seq, function(alpha) glmnet::cv.glmnet(x,y ,lambda=grid,foldid=foldid,alpha=alpha))
   cv.alpha
 })
 ```
 
+<!-- ```{r,fig.width = 20, fig.height = 40} -->
 
-```{r fig.width=20, fig.height=20}
-##plot lambda versus cvm
-renderPlot({
-par(mfrow=c(5,2))
-lapply(cv.alpha(), function(alpha) plot(alpha)) # auto sized
-})
+<!-- ##plot lambda versus cvm -->
 
-renderPlot({
-  par(mfrow=c(5,2))
-  lapply(cv.alpha(), function(alpha) plot(alpha, ylim=c(0.78,0.85))) # zoomed in, not seeing error bars completley anymore
-})
+<!-- renderPlot({ -->
 
+<!-- par(mfrow=c(5,2)) -->
+
+<!-- lapply(cv.alpha(), function(alpha) plot(alpha)) # auto sized -->
+
+<!-- }) -->
+
+<!-- ``` -->
+
+<!-- ```{r,fig.width = 20, fig.height = 40} -->
+
+<!-- renderPlot({ -->
+
+<!--   par(mfrow=c(5,2)) -->
+
+<!--   lapply(cv.alpha(), function(alpha) plot(alpha, ylim=c(0.78,0.85))) # zoomed in, not seeing error bars completley anymore -->
+
+<!-- }) -->
+
+<!-- ``` -->
+
+## Lambda versus mean CV error for each alpha value 
+
+```{r,fig.width = 20, fig.height = 40}
 renderPlot({
   par(mfrow=c(1,1))
   coul <- RColorBrewer::brewer.pal(9, name ="Set3" ) 
@@ -642,25 +721,26 @@ renderPlot({
 })
   legend("topleft",legend=c(alpha.seq),pch=1,col=coul, title = "alpha")
 })
+```
 
+## Lambda versus Mean CV error
+```{r,fig.width = 20, fig.height = 40}
 renderPlot({
   req(alp_lbd_cvm())
-  print(alp_lbd_cvm())
-  print(class(alp_lbd_cvm()$lambda))
-  plot(alp_lbd_cvm()$cvm, log(alp_lbd_cvm()$lambda))
-  points(min(alp_lbd_cvm()$cvm), log(alp_lbd_cvm()$lambda[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm))]), col="red") 
+  plot(alp_lbd_cvm()$cvm ~log(alp_lbd_cvm()$lambda), main="Mean CV error versus lambda")
+  points(min(alp_lbd_cvm()$cvm) ~ log(alp_lbd_cvm()$lambda[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm))]), col="red") 
 })
+```
 
+## ALpha versus Mean CV error
+```{r,fig.width = 20, fig.height = 40}
 renderPlot({
-plot(alp_lbd_cvm()$cvm ~ alp_lbd_cvm()$alpha)
+plot(alp_lbd_cvm()$cvm ~ alp_lbd_cvm()$alpha, main="Mean CV error versus alpha")
 points(min(alp_lbd_cvm()$cvm)~ alp_lbd_cvm()$alpha[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm))], col="red") 
 })
+```
 
-
-renderPlot({
-  plot(alp_lbd_cvm()$alpha, alp_lbd_cvm()$lambda)
-})
-
+```{r,fig.width = 20, fig.height = 40}
 renderPrint({
   x <- model.matrix(object = f(), data = data())[,-1]
   y <- data()[[input$response]]
@@ -668,24 +748,33 @@ renderPrint({
   out<-glmnet::glmnet(x,y,alpha=best_tune_cv.glmnet$alpha, lambda=best_tune_cv.glmnet$lambda, standardize =T)
   out$beta
 })
+```
 
+### Caret tuned alpha and lambda in glmnet
+```{r,fig.width = 20, fig.height = 40}
 renderPrint({
   x <- model.matrix(object = f(), data = data())[,-1]
   y <- data()[[input$response]]
  out<-glmnet::glmnet(x,y,alpha=elnet()$bestTune$alpha, lambda=elnet()$bestTune$lambda, standardize =T)
  out$beta 
 })
+```
 
-
+### Glmnet tuned alpha and lambda
+```{r,fig.width = 20, fig.height = 40}
 renderPrint({
   alp_lbd_cvm()[which(alp_lbd_cvm()$cvm==min(alp_lbd_cvm()$cvm)),]
 })
 ```
 
 <!-- ```{r} -->
+
 <!-- df<-data.frame(a_l_c) -->
+
 <!-- fig <- plotly::plot_ly(df, x = ~alpha.seq, y = ~min.lambda, z = ~min.cvm, ) -->
+
 <!-- fig -->
+
 <!-- ``` -->
 
 <!-- ```{r} -->
